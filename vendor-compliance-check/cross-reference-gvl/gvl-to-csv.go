@@ -10,10 +10,18 @@ import (
 	"strings"
 )
 
+// Constants used in this program
+const (
+	vendorListURL  = "https://vendor-list.consensu.org/v2/vendor-list.json"
+	outputFileName = "gvl_data.csv"
+)
+
+// VendorList represents the structure of the vendor list found on  the vendorListURL.
 type VendorList struct {
 	Vendors map[string]Vendor `json:"vendors"`
 }
 
+// Vendor represents the details of a vendor present in the VendorList.
 type Vendor struct {
 	Name                       string `json:"name"`
 	ID                         int    `json:"id"`
@@ -21,11 +29,13 @@ type Vendor struct {
 	Purposes                   []int  `json:"purposes"`
 }
 
+// DeviceDisclosure represents the structure of the device disclosure data.
 type DeviceDisclosure struct {
 	Disclosures []Disclosure `json:"disclosures"`
 	Domains     []Domain     `json:"domains"`
 }
 
+// Disclosure represents the details of a specific disclosure.
 type Disclosure struct {
 	Identifier    string   `json:"identifier"`
 	Type          string   `json:"type"`
@@ -35,51 +45,56 @@ type Disclosure struct {
 	Purposes      []int    `json:"purposes"`
 }
 
+// Domain represents the domain related to a vendor.
 type Domain struct {
 	Domain string `json:"domain"`
 	Use    string `json:"use"`
 }
 
+// The main function where the program starts
 func main() {
-	// Get the Global Vendor List from the IAB TCF v2.0 URL
-	resp, err := http.Get("https://vendor-list.consensu.org/v2/vendor-list.json")
+	vendorList := fetchVendorList(vendorListURL)
+	createVendorCSV(vendorList, outputFileName)
+}
+
+// fetchVendorList retrieves the vendor list from the provided URL.
+func fetchVendorList(url string) *VendorList {
+	resp, err := http.Get(url)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return
+		os.Exit(1)
 	}
 	defer resp.Body.Close()
 
 	body, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return
+		os.Exit(1)
 	}
 
 	var vendorList VendorList
 	err = json.Unmarshal(body, &vendorList)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return
+		os.Exit(1)
 	}
 
-	// Create the output CSV file
-	outputFile, err := os.Create("gvl_data.csv")
+	return &vendorList
+}
+
+// createVendorCSV creates a CSV file from the provided VendorList data.
+func createVendorCSV(vendorList *VendorList, fileName string) {
+	outputFile, err := os.Create(fileName)
 	if err != nil {
 		fmt.Println("Error:", err)
-		return
+		os.Exit(1)
 	}
 	defer outputFile.Close()
 
 	writer := csv.NewWriter(outputFile)
 	defer writer.Flush()
 
-	// Write the header row
-	header := []string{"Vendor Name", "Vendor ID", "Purposes", "Device Disclosure URL", "Cookie Domains", "Cookie Names", "Cookie Purposes", "Vendor Domains", "Vendor Uses"}
-	err = writer.Write(header)
-	if err != nil {
-		fmt.Println("Error:", err)
-		return
-	}
+	writeHeader(writer)
 
 	// Iterate through the vendors in the Global Vendor List
 	for _, vendor := range vendorList.Vendors {
@@ -88,45 +103,66 @@ func main() {
 			fmt.Println("Error:", err)
 			continue
 		}
-		cookieDomains := []string{}
-		cookieIdentifiers := []string{}
-		cookiePurposes := []string{}
 
-		vendorDomains := []string{}
-		vendorUses := []string{}
-
-		for _, disclosure := range deviceDisclosure.Disclosures {
-			if disclosure.Type == "cookie" {
-				cookieIdentifiers = append(cookieIdentifiers, disclosure.Identifier)
-				cookieDomains = append(cookieDomains, strings.Join(disclosure.Domains, ", "))
-				cookiePurposes = append(cookiePurposes, fmt.Sprintf("%v", disclosure.Purposes))
-			}
-		}
-
-		for _, domain := range deviceDisclosure.Domains {
-			vendorDomains = append(vendorDomains, domain.Domain)
-			vendorUses = append(vendorUses, domain.Use)
-		}
-
-		row := []string{
-			vendor.Name,
-			fmt.Sprintf("%d", vendor.ID),
-			fmt.Sprintf("%v", vendor.Purposes),
-			vendor.DeviceStorageDisclosureUrl,
-			strings.Join(cookieDomains, "; "),
-			strings.Join(cookieIdentifiers, "; "),
-			strings.Join(cookiePurposes, "; "),
-			strings.Join(vendorDomains, "; "),
-			strings.Join(vendorUses, "; "),
-		}
-		err = writer.Write(row)
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
-		}
+		writeVendor(writer, vendor, deviceDisclosure)
 	}
 }
 
+// writeHeader writes the header row to the CSV file.
+func writeHeader(writer *csv.Writer) {
+	header := []string{"Vendor Name", "Vendor ID", "Purposes", "Device Disclosure URL", "Cookie Domains", "Cookie Names", "Cookie Purposes", "Vendor Domains", "Vendor Uses"}
+	err := writer.Write(header)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+}
+
+// writeVendor writes the vendor information to the CSV file.
+func writeVendor(writer *csv.Writer, vendor Vendor, deviceDisclosure *DeviceDisclosure) {
+	cookieDomains, cookieIdentifiers, cookiePurposes := processDisclosures(deviceDisclosure.Disclosures)
+	vendorDomains, vendorUses := processDomains(deviceDisclosure.Domains)
+
+	row := []string{
+		vendor.Name,
+		fmt.Sprintf("%d", vendor.ID),
+		fmt.Sprintf("%v", vendor.Purposes),
+		vendor.DeviceStorageDisclosureUrl,
+		strings.Join(cookieDomains, "; "),
+		strings.Join(cookieIdentifiers, "; "),
+		strings.Join(cookiePurposes, "; "),
+		strings.Join(vendorDomains, "; "),
+		strings.Join(vendorUses, "; "),
+	}
+	err := writer.Write(row)
+	if err != nil {
+		fmt.Println("Error:", err)
+		os.Exit(1)
+	}
+}
+
+// processDisclosures processes disclosures and returns cookieDomains, cookieIdentifiers, cookiePurposes
+func processDisclosures(disclosures []Disclosure) (cookieDomains, cookieIdentifiers, cookiePurposes []string) {
+	for _, disclosure := range disclosures {
+		if disclosure.Type == "cookie" {
+			cookieIdentifiers = append(cookieIdentifiers, disclosure.Identifier)
+			cookieDomains = append(cookieDomains, strings.Join(disclosure.Domains, ", "))
+			cookiePurposes = append(cookiePurposes, fmt.Sprintf("%v", disclosure.Purposes))
+		}
+	}
+	return
+}
+
+// processDomains processes domains and returns vendorDomains, vendorUses
+func processDomains(domains []Domain) (vendorDomains, vendorUses []string) {
+	for _, domain := range domains {
+		vendorDomains = append(vendorDomains, domain.Domain)
+		vendorUses = append(vendorUses, domain.Use)
+	}
+	return
+}
+
+// fetchDeviceDisclosure fetches device disclosure from a given URL
 func fetchDeviceDisclosure(url string) (*DeviceDisclosure, error) {
 	if url == "" {
 		return &DeviceDisclosure{}, nil
